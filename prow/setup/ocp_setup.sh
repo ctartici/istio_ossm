@@ -31,6 +31,7 @@ WD=$(dirname "$0")
 WD=$(cd "$WD"; pwd)
 TIMEOUT=300
 export NAMESPACE="${NAMESPACE:-"istio-system"}"
+OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-"sail-operator"}"
 
 function setup_internal_registry() {
   # Validate that the internal registry is running in the OCP Cluster, configure the variable to be used in the make target. 
@@ -177,4 +178,26 @@ spec:
   timeout --foreground -v -s SIGHUP -k ${TIMEOUT} ${TIMEOUT} bash -c 'until oc get IPAddressPool default -n metallb-system; do sleep 5; done && echo "The IP address pool has been created."'
 
   echo "MetalLB has been deployed and configured with the IP address pool."
+}
+
+# Downloads and applies crds for sail-operator
+function install_crds(){
+  oc create namespace "$OPERATOR_NAMESPACE" || true
+  curl -L https://codeload.github.com/istio-ecosystem/sail-operator/tar.gz/main | \
+  tar -xz --strip=2 sail-operator-main/chart/crds || { echo "Failed to download crds"; exit 1; }
+  find "crds/" -type f -name "*.yaml" | while read -r file; do
+    echo "Applying: $file"
+    kubectl apply --server-side -n "$OPERATOR_NAMESPACE" -f "$file"
+  done
+}
+
+
+# Installs sail operator with the version in Helm Chart in upstream.
+function install_operator(){
+  helm repo add sail-operator https://istio-ecosystem.github.io/sail-operator
+  helm repo update
+  oc apply -f <(helm template sail-operator sail-operator/sail-operator \
+  --namespace $OPERATOR_NAMESPACE \
+  --set operatorLogLevel=3 \
+  --set image="quay.io/sail-dev/sail-operator:$(curl -s https://raw.githubusercontent.com/istio-ecosystem/sail-operator/main/chart/Chart.yaml | grep 'version:' | sed 's/version: //' | cut -d'.' -f1,2)-latest")
 }
